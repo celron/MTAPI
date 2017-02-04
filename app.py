@@ -104,6 +104,18 @@ def by_route(route):
     except KeyError as e:
         abort(404)
 
+@app.route('/by-station/<id_string>', methods=['GET'])
+@cross_origin
+def by_station(id_string):
+    ids = [ str(i) for i in id_string.split(',') ]
+    try:
+        return jsonify({
+            'data': mta.get_by_station(ids),
+            'updated': mta.last_update()
+            })
+    except KeyError as e:
+        abort(404)
+
 @app.route('/by-id/<id_string>', methods=['GET'])
 @cross_origin
 def by_index(id_string):

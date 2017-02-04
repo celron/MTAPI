@@ -6,6 +6,9 @@ import threading, time
 import csv, math, json
 import logging
 import google.protobuf.message
+import pprint
+import inspect
+
 
 def distance(p1, p2):
     return math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
@@ -81,7 +84,6 @@ class MtaSanitizer(object):
 
         # create working copy for thread safety
         stations = copy.deepcopy(self._stations)
-
         # clear old times
         for station in stations:
             station['N'] = []
@@ -92,27 +94,56 @@ class MtaSanitizer(object):
         routes = {}
 
         feed_urls = [
+            # L line
+            'http://datamine.mta.info/mta_esi.php?feed_id=2&key='+self._KEY,
+            # 1 2 3 4 5 6 S
             'http://datamine.mta.info/mta_esi.php?feed_id=1&key='+self._KEY,
-            'http://datamine.mta.info/mta_esi.php?feed_id=2&key='+self._KEY
+            #note that this causes the feed to stop
+            #this is B D F M
+            #'http://datamine.mta.info/mta_esi.php?feed_id=21&key='+self._KEY,
+            #this is SIRT (staten island)
+            'http://datamine.mta.info/mta_esi.php?feed_id=11&key='+self._KEY,
+            # this is the N Q R W 
+            'http://datamine.mta.info/mta_esi.php?feed_id=16&key='+self._KEY
         ]
 
         for i, feed_url in enumerate(feed_urls):
             mta_data = gtfs_realtime_pb2.FeedMessage()
             try:
                 with contextlib.closing(urllib2.urlopen(feed_url)) as r:
+                    print 'trying feed:',i
                     data = r.read()
                     mta_data.ParseFromString(data)
 
             except (urllib2.URLError, google.protobuf.message.DecodeError) as e:
+                print 'feed:',i
                 self.logger.error('Couldn\'t connect to MTA server: ' + str(e))
                 self._update_lock.release()
-                return
+                #return
 
             self._last_update = datetime.datetime.fromtimestamp(mta_data.header.timestamp, self._tz)
             self._MAX_TIME = self._last_update + datetime.timedelta(minutes = self._MAX_MINUTES)
-
             for entity in mta_data.entity:
                 if entity.trip_update:
+                    print entity.trip_update.trip
+                    print 'direction?',hasattr(entity.trip_update.trip,'trip_id') #'[nyct_trip_descriptor]')
+                    nyct = gtfs_realtime_pb2.TripDescriptor()
+                    for field in entity.trip_update.trip.ListFields():
+                        #if isinstance(field[1].gtfs_realtime_pb2.TripDescriptor):
+                        #    object = field[1]
+                        print 'looping',field[1]
+                    #trip_id = entity.trip_update.trip.trip_id
+                    #pp = pprint.PrettyPrinter(indent=4)
+                    #pp.pprint(inspect.getmembers(entity.trip_update.trip))
+                    #print entity.trip_update.trip.xtensions
+                    #object = entity.trip_update.trip.extensions_by_name('nyct_trip_descriptor')
+                    #object = entity.trip_update.trip.Extensions #HasExtension(entity.trip_update.trip)
+		    #entity.trip_update.trip.DESCRIPTOR.GetOptions().Extensions[entity.trip_update.trip.nyct_trip_descriptor]
+                    #print object
+
+#[nyct_trip_discriptor]
+#                    direction = entity.trip_update.trip.direction
+#		    print trip_id,direction
                     for update in entity.trip_update.stop_time_update:
                         time = update.arrival.time
                         if time == 0:
@@ -127,8 +158,20 @@ class MtaSanitizer(object):
                             route_id = 'S'
 
                         stop_id = str(update.stop_id[:3])
+                        #this breaks most likely because stop_id is not in stops
+                        #
+
+                        if not (stop_id in stops):
+                            continue     
                         station = stops[stop_id]
-                        direction = update.stop_id[3]
+                        #print stops
+                        #this information is specific to the NTA which has direction
+                        #in the stop_id, this is not universal
+ 
+                        #for feed 16, there is no north or south? which is in stop_id 
+                        #note that the direction is in the trip info
+                        #direction = update.stop_id[3]
+                        direction = 'N'
 
                         station[direction].append({
                             'route': route_id,
@@ -186,11 +229,23 @@ class MtaSanitizer(object):
 
         return out
 
+
+    def get_by_station(self, ids):
+        if self.is_expired():
+            self._update()
+
+        with self._read_lock:
+            out =  [self._stops[str(k)] for k in ids]
+
+        return out
+
     def get_by_id(self, ids):
         if self.is_expired():
             self._update()
 
         with self._read_lock:
+            out = ids
+            #//this gets it by a station number not by stop id
             out = [ self._stations[k] for k in ids ]
 
         return out
