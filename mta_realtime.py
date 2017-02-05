@@ -119,31 +119,27 @@ class MtaSanitizer(object):
                 print 'feed:',i
                 self.logger.error('Couldn\'t connect to MTA server: ' + str(e))
                 self._update_lock.release()
-                #return
-
+            print mta_data
             self._last_update = datetime.datetime.fromtimestamp(mta_data.header.timestamp, self._tz)
             self._MAX_TIME = self._last_update + datetime.timedelta(minutes = self._MAX_MINUTES)
             for entity in mta_data.entity:
                 if entity.trip_update:
-                    print entity.trip_update.trip
-                    print 'direction?',hasattr(entity.trip_update.trip,'trip_id') #'[nyct_trip_descriptor]')
-                    nyct = gtfs_realtime_pb2.TripDescriptor()
                     for field in entity.trip_update.trip.ListFields():
-                        #if isinstance(field[1].gtfs_realtime_pb2.TripDescriptor):
-                        #    object = field[1]
-                        print 'looping',field[1]
-                    #trip_id = entity.trip_update.trip.trip_id
-                    #pp = pprint.PrettyPrinter(indent=4)
-                    #pp.pprint(inspect.getmembers(entity.trip_update.trip))
-                    #print entity.trip_update.trip.xtensions
-                    #object = entity.trip_update.trip.extensions_by_name('nyct_trip_descriptor')
-                    #object = entity.trip_update.trip.Extensions #HasExtension(entity.trip_update.trip)
-		    #entity.trip_update.trip.DESCRIPTOR.GetOptions().Extensions[entity.trip_update.trip.nyct_trip_descriptor]
-                    #print object
-
-#[nyct_trip_discriptor]
-#                    direction = entity.trip_update.trip.direction
-#		    print trip_id,direction
+                        if field[0].full_name == 'transit_realtime.TripDescriptor.trip_id':
+                            trip_id = field[1]
+                        if field[0].type == 11: # 11 is a message
+                                                #9 string 8 enum, 14 enum
+                            for field in field[1].ListFields():
+                                #print 'message field',field[0].full_name
+                                #print 'extension', field[0].is_extension
+                                #print 'type', field[0].type
+                                #print 'label', field[0].label
+                                #print 'message_type', field[0].message_type
+                                if field[0].full_name == 'NyctTripDescriptor.direction':
+                                    if field[1] == 1:
+                                        direction = 'N'
+                                    if field[1] == 3:
+                                        direction = 'S'
                     for update in entity.trip_update.stop_time_update:
                         time = update.arrival.time
                         if time == 0:
@@ -171,9 +167,10 @@ class MtaSanitizer(object):
                         #for feed 16, there is no north or south? which is in stop_id 
                         #note that the direction is in the trip info
                         #direction = update.stop_id[3]
-                        direction = 'N'
+                        #direction = 'N'
 
                         station[direction].append({
+                            'trip_id': trip_id,
                             'route': route_id,
                             'time': time
                         })
