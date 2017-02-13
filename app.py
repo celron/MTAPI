@@ -15,6 +15,7 @@ from flask.json import JSONEncoder
 from datetime import datetime
 from functools import wraps
 import logging
+import os
 
 app = Flask(__name__)
 app.config.update(
@@ -23,9 +24,16 @@ app.config.update(
     CACHE_SECONDS=60,
     THREADED=True
 )
-app.config.from_envvar('MTA_SETTINGS')
 
-
+settings = 'MTA_SETTINGS'
+environ_check = os.environ.get(settings, 'settings.cfg')
+if environ_check != 'settings.cfg':
+    app.config.from_envvar('MTA_SETTINGS')
+else:
+    app.config.from_pyfile('settings.cfg')
+print 'current directory:',os.getcwd()
+path, filename = os.path.split(__file__)
+print 'current path',path
 # set debug logging
 if app.debug:
     logging.basicConfig(level=logging.INFO,
@@ -47,7 +55,7 @@ app.json_encoder = CustomJSONEncoder
 
 mta = mta_realtime.MtaSanitizer(
     app.config['MTA_KEY'],
-    app.config['STATIONS_FILE'],
+    path+os.path.sep+app.config['STATIONS_FILE'],
     max_trains=app.config['MAX_TRAINS'],
     max_minutes=app.config['MAX_MINUTES'],
     expires_seconds=app.config['CACHE_SECONDS'],
