@@ -117,9 +117,10 @@ class MtaSanitizer(object):
 
             except (urllib2.URLError, google.protobuf.message.DecodeError) as e:
                 print 'feed:',i
-                self.logger.error('Couldn\'t connect to MTA server: ' + str(e))
+                self.logger.error("Problem reading data from NTA server: " + str(e))
+                #print mta_data
                 self._update_lock.release()
-            print mta_data
+            #print mta_data
             self._last_update = datetime.datetime.fromtimestamp(mta_data.header.timestamp, self._tz)
             self._MAX_TIME = self._last_update + datetime.timedelta(minutes = self._MAX_MINUTES)
             for entity in mta_data.entity:
