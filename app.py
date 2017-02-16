@@ -80,7 +80,8 @@ def cross_origin(f):
 def index():
     return jsonify({
         'title': 'MTAPI',
-        'readme': 'Visit https://github.com/jonthornton/MTAPI for more info'
+        'original': 'Visit https://github.com/jonthornton/MTAPI for more info',
+        'readme': 'commands /routes, /by-station, /by-routes, /by-id, /by-location'
         })
 
 @app.route('/by-location', methods=['GET'])

@@ -15,7 +15,9 @@ def distance(p1, p2):
 
 class MtaSanitizer(object):
 
-    _LOCK_TIMEOUT = 300
+    #300 seconds is 5 minutes, a little long
+    #_LOCK_TIMEOUT = 300
+    _LOCK_TIMEOUT = 120
     _tz = timezone('US/Eastern')
 
     def __init__(self, key, stations_file, expires_seconds=None, max_trains=10, max_minutes=30, threaded=False):
@@ -27,7 +29,9 @@ class MtaSanitizer(object):
         self._stations = []
         self._stops = {}
         self._routes = {}
+        #the thread that locked this must release it
         self._read_lock = threading.RLock()
+        #any thread may release this lock
         self._update_lock = threading.Lock()
         self.logger = logging.getLogger(__name__)
 
@@ -100,11 +104,11 @@ class MtaSanitizer(object):
             'http://datamine.mta.info/mta_esi.php?feed_id=1&key='+self._KEY,
             #note that this causes the feed to stop
             #this is B D F M
-            #'http://datamine.mta.info/mta_esi.php?feed_id=21&key='+self._KEY,
+            'http://datamine.mta.info/mta_esi.php?feed_id=21&key='+self._KEY,
             #this is SIRT (staten island)
             'http://datamine.mta.info/mta_esi.php?feed_id=11&key='+self._KEY,
             # this is the N Q R W 
-            'http://datamine.mta.info/mta_esi.php?feed_id=16&key='+self._KEY
+            #'http://datamine.mta.info/mta_esi.php?feed_id=16&key='+self._KEY
         ]
 
         for i, feed_url in enumerate(feed_urls):
@@ -113,13 +117,22 @@ class MtaSanitizer(object):
                 with contextlib.closing(urllib2.urlopen(feed_url)) as r:
                     print 'trying feed:',i
                     data = r.read()
+                    print 'data read length',len(data)
+            except (urllib2.URLError) as e:
+                print 'feed:',i
+                self.logger.error("Problem reading data from MTA server: " + str(e))
+                self._update_lock.release()
+            try:
+                    #print 'data read length',r.keys()
                     mta_data.ParseFromString(data)
 
-            except (urllib2.URLError, google.protobuf.message.DecodeError) as e:
+            except (google.protobuf.message.DecodeError) as e:
                 print 'feed:',i
-                self.logger.error("Problem reading data from NTA server: " + str(e))
+                self.logger.error("Protobuff error: " + str(e))
                 #print mta_data
-                self._update_lock.release()
+                #what happens if we don't release the lock
+                #self._update_lock.release()
+
             #print mta_data
             self._last_update = datetime.datetime.fromtimestamp(mta_data.header.timestamp, self._tz)
             self._MAX_TIME = self._last_update + datetime.timedelta(minutes = self._MAX_MINUTES)
@@ -231,10 +244,12 @@ class MtaSanitizer(object):
     def get_by_station(self, ids):
         if self.is_expired():
             self._update()
-
+#        out =  [self._stops[str(k)] for k in ids]
         with self._read_lock:
-            out =  [self._stops[str(k)] for k in ids]
-
+            out = dict()
+            for k in ids:
+                if(k in self._stops.keys()):
+                    out[str(k)] = self._stops[str(k)]
         return out
 
     def get_by_id(self, ids):
