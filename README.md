@@ -234,13 +234,15 @@ Lists available routes.
 
 MTAPI is a Flask app designed to run under Python 2.7.
 
-1. Create a settings file. A sample is provided as `settings.cfg.sample`.
+1. Create a `settings.cfg` file. A sample is provided as `settings.cfg.sample`.
 2. Set up your environment and install dependencies.  
 `$ virtualenv .venv`  
 `$ source .venv/bin/activate`  
 `$ pip install -r requirements.txt`
 3. Run the server  
-`$ export MTA_SETTINGS=your_settings_file.cfg; python app.py`
+`$ python app.py`
+
+If your configuration is named something other than `settings.cfg`, set the `MTAPI_SETTINGS` env variable to your configuration path.
 
 This app makes use of Python threads. If running under uWSGI include the --enable-threads flag.
 
@@ -280,9 +282,15 @@ Standard Flask option. Will enabled enhanced logging and wildcard CORS headers.
 
 ## Generating a Stations File
 
-The MTA provides several static data files about the subway system but none include canonical information about each station. MTAPI includes a script that will parse the `stops.txt` dataset provided by the MTA and attempt to group the different train stops into subway stations. MTAPI will use this JSON file for station names and locations. The grouping is not perfect and editing the resulting JSON file is encouraged.
+The MTA provides several static data files about the subway system but none include canonical information about each station. MTAPI includes a script that will parse the `stops.txt` and `transfers.txt` datasets provided by the MTA and attempt to group the different train stops into subway stations. MTAPI will use this JSON file for station names and locations. The grouping is not perfect and editing the resulting files is encouraged.
 
-Usage: `$ python generate_stations_file.py stops.txt stations.json --threshold=0.0025`
+Usage: 
+```
+$ python make_stations_csv.py stops.txt transfers.txt > stations.csv
+# edit groupings in stations.csv
+$ python make_stations_.py stations.csv > stations.json
+# edit names in stations.json
+```
 
 ## Help
 

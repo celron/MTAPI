@@ -9,7 +9,7 @@
     :license: BSD, see LICENSE for more details.
 """
 
-import mta_realtime
+from mtapi import Mtapi
 from flask import Flask, request, jsonify, render_template, abort
 from flask.json import JSONEncoder
 from datetime import datetime
@@ -25,12 +25,22 @@ app.config.update(
     THREADED=True
 )
 
-settings = 'MTA_SETTINGS'
-environ_check = os.environ.get(settings, 'settings.cfg')
-if environ_check != 'settings.cfg':
-    app.config.from_envvar('MTA_SETTINGS')
+_SETTINGS_ENV_VAR = 'MTAPI_SETTINGS'
+_SETTINGS_DEFAULT_PATH = './settings.cfg'
+if _SETTINGS_ENV_VAR in os.environ:
+    app.config.from_envvar(_SETTINGS_ENV_VAR)
+elif os.path.isfile(_SETTINGS_DEFAULT_PATH):
+    app.config.from_pyfile(_SETTINGS_DEFAULT_PATH)
 else:
-    app.config.from_pyfile('settings.cfg')
+    raise Exception('No configuration found! Create a settings.cfg file or set MTAPI_SETTINGS env variable.')
+
+#settings = 'MTA_SETTINGS'
+#environ_check = os.environ.get(settings, 'settings.cfg')
+#if environ_check != 'settings.cfg':
+#    app.config.from_envvar('MTA_SETTINGS')
+#else:
+#    app.config.from_pyfile('settings.cfg')
+
 print 'current directory:',os.getcwd()
 path, filename = os.path.split(__file__)
 print 'current path',path
@@ -53,7 +63,7 @@ class CustomJSONEncoder(JSONEncoder):
         return JSONEncoder.default(self, obj)
 app.json_encoder = CustomJSONEncoder
 
-mta = mta_realtime.MtaSanitizer(
+mta = Mtapi(
     app.config['MTA_KEY'],
     path+os.path.sep+app.config['STATIONS_FILE'],
     max_trains=app.config['MAX_TRAINS'],
@@ -141,7 +151,7 @@ def by_index(id_string):
 @cross_origin
 def routes():
     return jsonify({
-        'data': mta.get_routes(),
+        'data': sorted(mta.get_routes()),
         'updated': mta.last_update()
         })
 

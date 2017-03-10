@@ -1,26 +1,37 @@
-import gtfs_realtime_pb2, nyct_subway_pb2
 import urllib2, contextlib, datetime, copy
+from collections import defaultdict
 from operator import itemgetter
 from pytz import timezone
 import threading, time
 import csv, math, json
 import logging
 import google.protobuf.message
-import pprint
-import inspect
 
+from mtaproto.feedresponse import FeedResponse, Trip, TripStop
 
 def distance(p1, p2):
     return math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
 
-class MtaSanitizer(object):
+class Mtapi(object):
 
     #300 seconds is 5 minutes, a little long
     #_LOCK_TIMEOUT = 300
     _LOCK_TIMEOUT = 120
     _tz = timezone('US/Eastern')
+    _FEED_URLS = [
+        # 1 2 3 4 5 6 S note that S becomes GS... does this make sense?
+        'http://datamine.mta.info/mta_esi.php?feed_id=1',
+        # L line
+        'http://datamine.mta.info/mta_esi.php?feed_id=2',
+        # this is SI
+        'http://datamine.mta.info/mta_esi.php?feed_id=11',
+        # this is the N Q R W still beta
+        #'http://datamine.mta.info/mta_esi.php?feed_id=16',
+        # this is the B D F M still beta
+        'http://datamine.mta.info/mta_esi.php?feed_id=21'
+    ]
 
-    def __init__(self, key, stations_file, expires_seconds=None, max_trains=10, max_minutes=30, threaded=False):
+    def __init__(self, key, stations_file, expires_seconds=None, max_trains=10, max_minutes=30, threaded=True):
         self._KEY = key
         self._MAX_TRAINS = max_trains
         self._MAX_MINUTES = max_minutes
@@ -34,6 +45,8 @@ class MtaSanitizer(object):
         #any thread may release this lock
         self._update_lock = threading.Lock()
         self.logger = logging.getLogger(__name__)
+
+        self._init_feeds_key(key)
 
         # initialize the stations database
         try:
@@ -50,6 +63,9 @@ class MtaSanitizer(object):
 
         if self._THREADED:
             self._start_timer()
+
+    def _init_feeds_key(self, key):
+        self._FEED_URLS = list(map(lambda x: x + '&key=' + key, self._FEED_URLS))
 
     def _start_timer(self):
         self.logger.info('Starting update thread...')
@@ -71,6 +87,18 @@ class MtaSanitizer(object):
                 stops[stop_id] = station
 
         return stops
+
+    @staticmethod
+    def _load_mta_feed(self, feed_url):
+        mta_data = None
+        try:
+            with contextlib.closing(urllib2.urlopen(feed_url)) as r:
+                data = r.read()
+                return FeedResponse(data)
+
+        except (urllib2.URLError, google.protobuf.message.DecodeError) as e:
+            self.logger.error('Couldn\'t connect to MTA server: ' + str(e))
+            return False
 
     def _update(self):
         if not self._update_lock.acquire(False):
@@ -94,108 +122,57 @@ class MtaSanitizer(object):
             station['S'] = []
             station['routes'] = set()
 
-        stops = MtaSanitizer._build_stops_index(stations)
-        routes = {}
+        stops = self._build_stops_index(stations)
+        routes = defaultdict(set)
 
-        feed_urls = [
-            # L line
-            'http://datamine.mta.info/mta_esi.php?feed_id=2&key='+self._KEY,
-            # 1 2 3 4 5 6 S
-            'http://datamine.mta.info/mta_esi.php?feed_id=1&key='+self._KEY,
-            #note that this causes the feed to stop
-            #this is B D F M
-            'http://datamine.mta.info/mta_esi.php?feed_id=21&key='+self._KEY,
-            #this is SIRT (staten island)
-            'http://datamine.mta.info/mta_esi.php?feed_id=11&key='+self._KEY,
-            # this is the N Q R W 
-            #'http://datamine.mta.info/mta_esi.php?feed_id=16&key='+self._KEY
-        ]
+        for i, feed_url in enumerate(self._FEED_URLS):
+            self.logger.info('trying feed:%d' % i)
+            mta_data = self._load_mta_feed(self, feed_url)
 
-        for i, feed_url in enumerate(feed_urls):
-            mta_data = gtfs_realtime_pb2.FeedMessage()
-            try:
-                with contextlib.closing(urllib2.urlopen(feed_url)) as r:
-                    print 'trying feed:',i
-                    data = r.read()
-                    print 'data read length',len(data)
-            except (urllib2.URLError) as e:
-                print 'feed:',i
-                self.logger.error("Problem reading data from MTA server: " + str(e))
-                self._update_lock.release()
-            try:
-                    #print 'data read length',r.keys()
-                    mta_data.ParseFromString(data)
+            if not mta_data:
+                continue
 
-            except (google.protobuf.message.DecodeError) as e:
-                print 'feed:',i
-                self.logger.error("Protobuff error: " + str(e))
-                #print mta_data
-                #what happens if we don't release the lock
-                #self._update_lock.release()
-
-            #print mta_data
             self._last_update = datetime.datetime.fromtimestamp(mta_data.header.timestamp, self._tz)
             self._MAX_TIME = self._last_update + datetime.timedelta(minutes = self._MAX_MINUTES)
             for entity in mta_data.entity:
-                if entity.trip_update:
-                    for field in entity.trip_update.trip.ListFields():
-                        if field[0].full_name == 'transit_realtime.TripDescriptor.trip_id':
-                            trip_id = field[1]
-                        if field[0].type == 11: # 11 is a message
-                                                #9 string 8 enum, 14 enum
-                            for field in field[1].ListFields():
-                                #print 'message field',field[0].full_name
-                                #print 'extension', field[0].is_extension
-                                #print 'type', field[0].type
-                                #print 'label', field[0].label
-                                #print 'message_type', field[0].message_type
-                                if field[0].full_name == 'NyctTripDescriptor.direction':
-                                    if field[1] == 1:
-                                        direction = 'N'
-                                    if field[1] == 3:
-                                        direction = 'S'
-                    for update in entity.trip_update.stop_time_update:
-                        time = update.arrival.time
-                        if time == 0:
-                            time = update.departure.time
+                trip = Trip(entity)
 
-                        time = datetime.datetime.fromtimestamp(time, self._tz)
-                        if time < self._last_update or time > self._MAX_TIME:
-                            continue
+                if not trip.is_valid():
+                    continue
 
-                        route_id = entity.trip_update.trip.route_id
-                        if route_id == 'GS':
-                            route_id = 'S'
+                direction = trip.direction[0]
+                route_id = trip.route_id
 
-                        stop_id = str(update.stop_id[:3])
-                        #this breaks most likely because stop_id is not in stops
-                        #
+                # check if this is a trip_update only otherwise skip but why?
 
-                        if not (stop_id in stops):
-                            continue     
-                        station = stops[stop_id]
-                        #print stops
-                        #this information is specific to the NTA which has direction
-                        #in the stop_id, this is not universal
- 
-                        #for feed 16, there is no north or south? which is in stop_id 
-                        #note that the direction is in the trip info
-                        #direction = update.stop_id[3]
-                        #direction = 'N'
+                for field in entity.trip_update.trip.ListFields():
+                    if field[0].full_name == 'transit_realtime.TripDescriptor.trip_id':
+                        trip_id = field[1]
+                station['routes'].add(route_id)
 
-                        station[direction].append({
-                            'trip_id': trip_id,
-                            'route': route_id,
-                            'time': time
-                        })
+                for update in entity.trip_update.stop_time_update:
 
-                        station['routes'].add(route_id)
-                        try:
-                            routes[route_id].add(stop_id)
-                        except KeyError, e:
-                            routes[route_id] = set([stop_id])
+                    trip_stop = TripStop(update)
 
+                    time = trip_stop.time
 
+                    if time < self._last_update or time > self._MAX_TIME:
+                        continue
+
+                    stop_id = trip_stop.stop_id
+                    if stop_id not in stops:
+                        self.logger.info('Stop %s not found for %s', stop_id, route_id)
+                        continue
+                    station = stops[stop_id]
+
+                    station[direction].append({
+                        #add trip_id
+                        'trip_id': trip_id,
+                        'route': route_id,
+                        'time': time
+                    })
+
+                    routes[route_id].add(stop_id)
 
         # sort by time
         for station in stations:
@@ -257,7 +234,6 @@ class MtaSanitizer(object):
             self._update()
 
         with self._read_lock:
-            out = ids
             #//this gets it by a station number not by stop id
             out = [ self._stations[k] for k in ids ]
 
