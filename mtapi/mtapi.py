@@ -4,10 +4,12 @@ from operator import itemgetter
 from pytz import timezone
 import threading, time
 import csv, math, json
+import threading
 import logging
 import google.protobuf.message
 
-from mtaproto.feedresponse import FeedResponse, Trip, TripStop
+from mtaproto.feedresponse import FeedResponse, Trip, TripStop, TZ
+from _mtapithreader import _MtapiThreader
 
 logger = logging.getLogger(__name__)
 
@@ -16,10 +18,47 @@ def distance(p1, p2):
 
 class Mtapi(object):
 
-    #300 seconds is 5 minutes, a little long
-    #_LOCK_TIMEOUT = 300
-    _LOCK_TIMEOUT = 120
-    _tz = timezone('US/Eastern')
+    class _Station(object):
+        last_update = None
+
+        def __init__(self, json):
+            self.json = json
+            self.trains = {}
+            self.clear_train_data()
+
+        def __getitem__(self, key):
+            return self.json[key]
+
+        def add_train(self, route_id, direction, train_time, feed_time, trip_id):
+            self.routes.add(route_id)
+            self.trains[direction].append({
+                'route': route_id,
+                'time': train_time,
+                'trip_id': trip_id
+            })
+            self.last_update = feed_time
+
+        def clear_train_data(self):
+            self.trains['N'] = []
+            self.trains['S'] = []
+            self.routes = set()
+            self.last_update = None
+
+        def sort_trains(self, max_trains):
+            self.trains['S'] = sorted(self.trains['S'], key=itemgetter('time'))[:max_trains]
+            self.trains['N'] = sorted(self.trains['N'], key=itemgetter('time'))[:max_trains]
+
+        def serialize(self):
+            out = {
+                'N': self.trains['N'],
+                'S': self.trains['S'],
+                'routes': self.routes,
+                'last_update': self.last_update
+            }
+            out.update(self.json)
+            return out
+
+
     _FEED_URLS = [
         # 1 2 3 4 5 6 S note that S becomes GS... does this make sense?
         'http://datamine.mta.info/mta_esi.php?feed_id=1',
@@ -33,28 +72,26 @@ class Mtapi(object):
         'http://datamine.mta.info/mta_esi.php?feed_id=21'
     ]
 
-    def __init__(self, key, stations_file, expires_seconds=None, max_trains=10, max_minutes=30, threaded=True):
+    def __init__(self, key, stations_file, expires_seconds=60, max_trains=10, max_minutes=30, threaded=False):
         self._KEY = key
         self._MAX_TRAINS = max_trains
         self._MAX_MINUTES = max_minutes
         self._EXPIRES_SECONDS = expires_seconds
-        self._THREADED = threaded
-        self._stations = []
-        self._stops = {}
+        self._stations = {}
+        self._stops_to_stations = {}
         self._routes = {}
         #the thread that locked this must release it
         self._read_lock = threading.RLock()
-        #any thread may release this lock
-        self._update_lock = threading.Lock()
 
-        self._init_feeds_key(key)
+        self._FEED_URLS = self._init_feeds_key(key, self._FEED_URLS)
 
         # initialize the stations database
         try:
             with open(stations_file, 'rb') as f:
                 self._stations = json.load(f)
-                #//for idx, station in enumerate(self._stations):
-                #    station['id'] = idx
+                for id in self._stations:
+                    self._stations[id] = self._Station(self._stations[id])
+                self._stops_to_stations = self._build_stops_index(self._stations)
 
         except IOError as e:
             print 'Couldn\'t load stations file '+stations_file
@@ -62,36 +99,25 @@ class Mtapi(object):
 
         self._update()
 
-        if self._THREADED:
-            self._start_timer()
+        if threaded:
+            self.threader = _MtapiThreader(self, expires_seconds)
+            self.threader.start_timer()
 
-    def _init_feeds_key(self, key):
-        self._FEED_URLS = list(map(lambda x: x + '&key=' + key, self._FEED_URLS))
-
-    def _start_timer(self):
-        logger.info('Starting update thread...')
-        self._timer_thread = threading.Thread(target=self._update_timer)
-        self._timer_thread.daemon = True
-        self._timer_thread.start()
-
-    def _update_timer(self):
-        while True:
-            time.sleep(self._EXPIRES_SECONDS)
-            self._update_thread = threading.Thread(target=self._update)
-            self._update_thread.start()
+    @staticmethod
+    def _init_feeds_key(key, urls):
+        return list(map(lambda x: x + '&key=' + key, urls))
 
     @staticmethod
     def _build_stops_index(stations):
         stops = {}
-        for id in stations:
-            for stop_id in stations[id]['stops'].keys():
-                stops[stop_id] = stations[id]
+        for station_id in stations:
+            for stop_id in stations[station_id]['stops'].keys():
+                stops[stop_id] = station_id
 
         return stops
 
     @staticmethod
     def _load_mta_feed(feed_url):
-        mta_data = None
         try:
             with contextlib.closing(urllib2.urlopen(feed_url)) as r:
                 data = r.read()
@@ -102,29 +128,16 @@ class Mtapi(object):
             return False
 
     def _update(self):
-        if not self._update_lock.acquire(False):
-            logger.info('Update locked!')
-
-            lock_age = datetime.datetime.now() - self._update_lock_time
-            if lock_age.total_seconds() > self._LOCK_TIMEOUT:
-                self._update_lock = threading.Lock()
-                logger.info('Cleared expired update lock')
-
-            return
-
-        self._update_lock_time = datetime.datetime.now()
         logger.info('updating...')
+        self._last_update = datetime.datetime.now(TZ)
 
         # create working copy for thread safety
         stations = copy.deepcopy(self._stations)
 
         # clear old times
         for id in stations:
-            stations[id]['N'] = []
-            stations[id]['S'] = []
-            stations[id]['routes'] = set()
+            stations[id].clear_train_data()
 
-        stops = self._build_stops_index(stations)
         routes = defaultdict(set)
 
         for i, feed_url in enumerate(self._FEED_URLS):
@@ -133,8 +146,7 @@ class Mtapi(object):
             if not mta_data:
                 continue
 
-            self._last_update = datetime.datetime.fromtimestamp(mta_data.header.timestamp, self._tz)
-            self._MAX_TIME = self._last_update + datetime.timedelta(minutes = self._MAX_MINUTES)
+            max_time = self._last_update + datetime.timedelta(minutes = self._MAX_MINUTES)
 
             for entity in mta_data.entity:
                 trip = Trip(entity)
@@ -155,43 +167,32 @@ class Mtapi(object):
                 for update in entity.trip_update.stop_time_update:
                     trip_stop = TripStop(update)
 
-                    time = trip_stop.time
-                    if time < self._last_update or time > self._MAX_TIME:
+                    if trip_stop.time < self._last_update or trip_stop.time > max_time:
                         continue
 
                     stop_id = trip_stop.stop_id
 
-                    if stop_id not in stops:
+                    if stop_id not in self._stops_to_stations:
                         logger.info('Stop %s not found', stop_id)
                         continue
 
-                    station = stops[stop_id]
-                    station['routes'].add(route_id)
-                    station[direction].append({
-                        #add trip_id
-                        'trip_id': trip_id,
-                        'route': route_id,
-                        'time': time
-                    })
+                    station_id = self._stops_to_stations[stop_id]
+                    stations[station_id].add_train(route_id,
+                                                   direction,
+                                                   trip_stop.time,
+                                                   mta_data.timestamp,
+                                                   trip_id)
 
                     routes[route_id].add(stop_id)
 
 
         # sort by time
         for id in stations:
-            if stations[id]['S'] or stations[id]['N']:
-                stations[id]['hasData'] = True
-                stations[id]['S'] = sorted(stations[id]['S'], key=itemgetter('time'))[:self._MAX_TRAINS]
-                stations[id]['N'] = sorted(stations[id]['N'], key=itemgetter('time'))[:self._MAX_TRAINS]
-            else:
-                stations[id]['hasData'] = False
+            stations[id].sort_trains(self._MAX_TRAINS)
 
         with self._read_lock:
-            self._stops = stops
             self._routes = routes
             self._stations = stations
-
-        self._update_lock.release()
 
     def last_update(self):
         return self._last_update
@@ -201,9 +202,10 @@ class Mtapi(object):
             self._update()
 
         with self._read_lock:
-            sortable_stations = copy.deepcopy(self._stations)
+            sortable_stations = copy.deepcopy(self._stations).values()
 
         sortable_stations.sort(key=lambda x: distance(x['location'], point))
+        sortable_stations = map(lambda x: x.serialize(), sortable_stations)
         return sortable_stations[:limit]
 
     def get_routes(self):
@@ -214,23 +216,18 @@ class Mtapi(object):
             self._update()
 
         with self._read_lock:
-            out = [ self._stops[k] for k in self._routes[route] ]
+            out = [ self._stations[self._stops_to_stations[k]].serialize() for k in self._routes[route] ]
 
         out.sort(key=lambda x: x['name'])
-
         return out
 
-
+    # loop through ids based on MTA ids and return the arrival/departure information
     def get_by_station(self, ids):
         if self.is_expired():
             self._update()
-#        out =  [self._stops[str(k)] for k in ids]
-        with self._read_lock:
-            out = dict()
-            for k in ids:
-                if(k in self._stops.keys()):
-                    out[str(k)] = self._stops[str(k)]
-        return out
+        out = [self._stops_to_stations[str(k)] for k in ids]
+
+        return self.get_by_id(out)
 
     def get_by_id(self, ids):
         if self.is_expired():
@@ -238,19 +235,15 @@ class Mtapi(object):
 
         with self._read_lock:
             #//this gets it by a station number not by stop id
-            out = [ self._stations[k] for k in ids ]
+            out = [ self._stations[k].serialize() for k in ids ]
 
         return out
 
     def is_expired(self):
-        if self._THREADED:
-            # check that the update thread is still running
-            if not self._timer_thread.is_alive():
-                self._start_timer()
-                return False
-
+        if self.threader and self.threader.restart_if_dead():
+            return False
         elif self._EXPIRES_SECONDS:
-            age = datetime.datetime.now(self._tz) - self._last_update
+            age = datetime.datetime.now(TZ) - self._last_update
             return age.total_seconds() > self._EXPIRES_SECONDS
         else:
             return False
