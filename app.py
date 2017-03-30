@@ -107,19 +107,15 @@ def by_location():
         response.status_code = 400
         return response
 
-    return jsonify({
-        'data': mta.get_by_point(location, 5),
-        'updated': mta.last_update()
-        })
+    data = mta.get_by_point(location, 5)
+    return _make_envelope(data)
 
 @app.route('/by-route/<route>', methods=['GET'])
 @cross_origin
 def by_route(route):
     try:
-        return jsonify({
-            'data': mta.get_by_route(route),
-            'updated': mta.last_update()
-            })
+        data = mta.get_by_route(route)
+        return _make_envelope(data)
     except KeyError as e:
         abort(404)
 
@@ -140,10 +136,8 @@ def by_station(id_string):
 def by_index(id_string):
     ids = id_string.split(',')
     try:
-        return jsonify({
-            'data': mta.get_by_id(ids),
-            'updated': mta.last_update()
-            })
+        data = mta.get_by_id(ids)
+        return _make_envelope(data)
     except KeyError as e:
         abort(404)
 
@@ -153,6 +147,24 @@ def routes():
     return jsonify({
         'data': sorted(mta.get_routes()),
         'updated': mta.last_update()
+        })
+
+def _envelope_reduce(a, b):
+    if a['last_update'] and b['last_update']:
+        return a if a['last_update'] < b['last_update'] else b
+    elif a['last_update']:
+        return a
+    else:
+        return b
+
+def _make_envelope(data):
+    time = None
+    if data:
+        time = reduce(_envelope_reduce, data)['last_update']
+
+    return jsonify({
+        'data': data,
+        'updated': time
         })
 
 if __name__ == '__main__':

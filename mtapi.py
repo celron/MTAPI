@@ -53,8 +53,8 @@ class Mtapi(object):
         try:
             with open(stations_file, 'rb') as f:
                 self._stations = json.load(f)
-                for idx, station in enumerate(self._stations):
-                    station['id'] = idx
+                #//for idx, station in enumerate(self._stations):
+                #    station['id'] = idx
 
         except IOError as e:
             print 'Couldn\'t load stations file '+stations_file
