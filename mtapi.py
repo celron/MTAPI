@@ -9,6 +9,8 @@ import google.protobuf.message
 
 from mtaproto.feedresponse import FeedResponse, Trip, TripStop
 
+logger = logging.getLogger(__name__)
+
 def distance(p1, p2):
     return math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
 
@@ -44,7 +46,6 @@ class Mtapi(object):
         self._read_lock = threading.RLock()
         #any thread may release this lock
         self._update_lock = threading.Lock()
-        self.logger = logging.getLogger(__name__)
 
         self._init_feeds_key(key)
 
@@ -68,7 +69,7 @@ class Mtapi(object):
         self._FEED_URLS = list(map(lambda x: x + '&key=' + key, self._FEED_URLS))
 
     def _start_timer(self):
-        self.logger.info('Starting update thread...')
+        logger.info('Starting update thread...')
         self._timer_thread = threading.Thread(target=self._update_timer)
         self._timer_thread.daemon = True
         self._timer_thread.start()
@@ -82,14 +83,14 @@ class Mtapi(object):
     @staticmethod
     def _build_stops_index(stations):
         stops = {}
-        for station in stations:
-            for stop_id in station['stops'].keys():
-                stops[stop_id] = station
+        for id in stations:
+            for stop_id in stations[id]['stops'].keys():
+                stops[stop_id] = stations[id]
 
         return stops
 
     @staticmethod
-    def _load_mta_feed(self, feed_url):
+    def _load_mta_feed(feed_url):
         mta_data = None
         try:
             with contextlib.closing(urllib2.urlopen(feed_url)) as r:
@@ -97,43 +98,44 @@ class Mtapi(object):
                 return FeedResponse(data)
 
         except (urllib2.URLError, google.protobuf.message.DecodeError) as e:
-            self.logger.error('Couldn\'t connect to MTA server: ' + str(e))
+            logger.error('Couldn\'t connect to MTA server: ' + str(e))
             return False
 
     def _update(self):
         if not self._update_lock.acquire(False):
-            self.logger.info('Update locked!')
+            logger.info('Update locked!')
 
             lock_age = datetime.datetime.now() - self._update_lock_time
             if lock_age.total_seconds() > self._LOCK_TIMEOUT:
                 self._update_lock = threading.Lock()
-                self.logger.info('Cleared expired update lock')
+                logger.info('Cleared expired update lock')
 
             return
 
         self._update_lock_time = datetime.datetime.now()
-        self.logger.info('updating...')
+        logger.info('updating...')
 
         # create working copy for thread safety
         stations = copy.deepcopy(self._stations)
+
         # clear old times
-        for station in stations:
-            station['N'] = []
-            station['S'] = []
-            station['routes'] = set()
+        for id in stations:
+            stations[id]['N'] = []
+            stations[id]['S'] = []
+            stations[id]['routes'] = set()
 
         stops = self._build_stops_index(stations)
         routes = defaultdict(set)
 
         for i, feed_url in enumerate(self._FEED_URLS):
-            self.logger.info('trying feed:%d' % i)
-            mta_data = self._load_mta_feed(self, feed_url)
+            mta_data = self._load_mta_feed(feed_url)
 
             if not mta_data:
                 continue
 
             self._last_update = datetime.datetime.fromtimestamp(mta_data.header.timestamp, self._tz)
             self._MAX_TIME = self._last_update + datetime.timedelta(minutes = self._MAX_MINUTES)
+
             for entity in mta_data.entity:
                 trip = Trip(entity)
 
@@ -148,23 +150,23 @@ class Mtapi(object):
                 for field in entity.trip_update.trip.ListFields():
                     if field[0].full_name == 'transit_realtime.TripDescriptor.trip_id':
                         trip_id = field[1]
-                station['routes'].add(route_id)
+                # added below station['routes'].add(route_id)
 
                 for update in entity.trip_update.stop_time_update:
-
                     trip_stop = TripStop(update)
 
                     time = trip_stop.time
-
                     if time < self._last_update or time > self._MAX_TIME:
                         continue
 
                     stop_id = trip_stop.stop_id
-                    if stop_id not in stops:
-                        self.logger.info('Stop %s not found for %s', stop_id, route_id)
-                        continue
-                    station = stops[stop_id]
 
+                    if stop_id not in stops:
+                        logger.info('Stop %s not found', stop_id)
+                        continue
+
+                    station = stops[stop_id]
+                    station['routes'].add(route_id)
                     station[direction].append({
                         #add trip_id
                         'trip_id': trip_id,
@@ -174,14 +176,15 @@ class Mtapi(object):
 
                     routes[route_id].add(stop_id)
 
+
         # sort by time
-        for station in stations:
-            if station['S'] or station['N']:
-                station['hasData'] = True
-                station['S'] = sorted(station['S'], key=itemgetter('time'))[:self._MAX_TRAINS]
-                station['N'] = sorted(station['N'], key=itemgetter('time'))[:self._MAX_TRAINS]
+        for id in stations:
+            if stations[id]['S'] or stations[id]['N']:
+                stations[id]['hasData'] = True
+                stations[id]['S'] = sorted(stations[id]['S'], key=itemgetter('time'))[:self._MAX_TRAINS]
+                stations[id]['N'] = sorted(stations[id]['N'], key=itemgetter('time'))[:self._MAX_TRAINS]
             else:
-                station['hasData'] = False
+                stations[id]['hasData'] = False
 
         with self._read_lock:
             self._stops = stops

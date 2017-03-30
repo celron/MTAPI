@@ -138,7 +138,7 @@ def by_station(id_string):
 @app.route('/by-id/<id_string>', methods=['GET'])
 @cross_origin
 def by_index(id_string):
-    ids = [ int(i) for i in id_string.split(',') ]
+    ids = id_string.split(',')
     try:
         return jsonify({
             'data': mta.get_by_id(ids),
