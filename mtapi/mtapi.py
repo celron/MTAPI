@@ -67,7 +67,7 @@ class Mtapi(object):
         # this is SI
         'http://datamine.mta.info/mta_esi.php?feed_id=11',
         # this is the N Q R W still beta
-        #'http://datamine.mta.info/mta_esi.php?feed_id=16',
+        'http://datamine.mta.info/mta_esi.php?feed_id=16',
         # this is the B D F M still beta
         'http://datamine.mta.info/mta_esi.php?feed_id=21'
     ]
@@ -173,7 +173,7 @@ class Mtapi(object):
                     stop_id = trip_stop.stop_id
 
                     if stop_id not in self._stops_to_stations:
-                        logger.info('Stop %s not found', stop_id)
+                        # comment out logger.info('Stop %s not found', stop_id)
                         continue
 
                     station_id = self._stops_to_stations[stop_id]
