@@ -70,6 +70,11 @@ class Mtapi(object):
         'http://datamine.mta.info/mta_esi.php?feed_id=16',
         # this is the B D F M still beta
         'http://datamine.mta.info/mta_esi.php?feed_id=21'
+        # this is the A C E still beta
+        'http://datamine.mta.info/mta_esi.php?feed_id=27'
+        # this is the G still beta
+        'http://datamine.mta.info/mta_esi.php?feed_id=31'
+
     ]
 
     def __init__(self, key, stations_file, expires_seconds=60, max_trains=10, max_minutes=30, threaded=False):
