@@ -69,9 +69,9 @@ class Mtapi(object):
         # this is the N Q R W still beta
         'http://datamine.mta.info/mta_esi.php?feed_id=16',
         # this is the B D F M still beta
-        'http://datamine.mta.info/mta_esi.php?feed_id=21'
+        'http://datamine.mta.info/mta_esi.php?feed_id=21',
         # this is the A C E still beta
-        'http://datamine.mta.info/mta_esi.php?feed_id=27'
+        'http://datamine.mta.info/mta_esi.php?feed_id=26',
         # this is the G still beta
         'http://datamine.mta.info/mta_esi.php?feed_id=31'
 
