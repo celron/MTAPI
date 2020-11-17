@@ -1,3 +1,4 @@
+import urllib
 import urllib2, contextlib, datetime, copy
 from collections import defaultdict
 from operator import itemgetter
@@ -61,19 +62,20 @@ class Mtapi(object):
 
     _FEED_URLS = [
         # 1 2 3 4 5 6 S note that S becomes GS... does this make sense?
-        'http://datamine.mta.info/mta_esi.php?feed_id=1',
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs',
         # L line
-        'http://datamine.mta.info/mta_esi.php?feed_id=2',
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-l',
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-jz',
         # this is SI
-        'http://datamine.mta.info/mta_esi.php?feed_id=11',
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-7',
         # this is the N Q R W still beta
-        'http://datamine.mta.info/mta_esi.php?feed_id=16',
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-nqrw',
         # this is the B D F M still beta
-        'http://datamine.mta.info/mta_esi.php?feed_id=21',
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-bdfm',
         # this is the A C E still beta
-        'http://datamine.mta.info/mta_esi.php?feed_id=26',
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace',
         # this is the G still beta
-        'http://datamine.mta.info/mta_esi.php?feed_id=31'
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-g'
 
     ]
 
@@ -88,7 +90,7 @@ class Mtapi(object):
         #the thread that locked this must release it
         self._read_lock = threading.RLock()
 
-        self._FEED_URLS = self._init_feeds_key(key, self._FEED_URLS)
+        # self._FEED_URLS = self._init_feeds_key(key, self._FEED_URLS)
 
         # initialize the stations database
         try:
@@ -121,10 +123,15 @@ class Mtapi(object):
 
         return stops
 
-    @staticmethod
-    def _load_mta_feed(feed_url):
+    # changed to use the new keys located in the header
+    def _load_mta_feed(self, feed_url):
         try:
-            with contextlib.closing(urllib2.urlopen(feed_url)) as r:
+            header = { 'x-api-key': self._KEY}
+            request = urllib2.Request(feed_url,None,header)
+            #request.add_header('x-api-key', self._KEY)
+            #header = { 'x-api-key',self._KEY)
+            #with contextlib.closing(urllib2.urlopen(feed_url)) as r:
+            with contextlib.closing(urllib2.urlopen(request)) as r:
                 data = r.read()
                 return FeedResponse(data)
 
