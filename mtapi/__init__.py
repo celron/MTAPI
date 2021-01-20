@@ -1,1 +1,1 @@
-from mtapi import Mtapi
+from mtapi.mtapi import Mtapi

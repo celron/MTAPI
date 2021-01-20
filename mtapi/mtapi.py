@@ -1,6 +1,6 @@
-import urllib
-import urllib2, contextlib, datetime, copy
+import urllib, contextlib, datetime, copy
 from collections import defaultdict
+from itertools import islice
 from operator import itemgetter
 from pytz import timezone
 import threading, time
@@ -10,7 +10,7 @@ import logging
 import google.protobuf.message
 
 from mtaproto.feedresponse import FeedResponse, Trip, TripStop, TZ
-from _mtapithreader import _MtapiThreader
+from mtapi._mtapithreader import _MtapiThreader
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,7 @@ class Mtapi(object):
         self._stations = {}
         self._stops_to_stations = {}
         self._routes = {}
+        self._THREADED = threaded
         #the thread that locked this must release it
         self._read_lock = threading.RLock()
 
@@ -101,7 +102,7 @@ class Mtapi(object):
                 self._stops_to_stations = self._build_stops_index(self._stations)
 
         except IOError as e:
-            print 'Couldn\'t load stations file '+stations_file
+            print('Couldn\'t load stations file '+stations_file)
             exit()
 
         self._update()
@@ -126,16 +127,17 @@ class Mtapi(object):
     # changed to use the new keys located in the header
     def _load_mta_feed(self, feed_url):
         try:
-            header = { 'x-api-key': self._KEY}
-            request = urllib2.Request(feed_url,None,header)
-            #request.add_header('x-api-key', self._KEY)
-            #header = { 'x-api-key',self._KEY)
-            #with contextlib.closing(urllib2.urlopen(feed_url)) as r:
-            with contextlib.closing(urllib2.urlopen(request)) as r:
+            #header = { 'x-api-key': self._KEY}
+            #request = urllib2.Request(feed_url,None,header)
+            # with contextlib.closing(urllib2.urlopen(feed_url)) as r:
+            # header = { 'x-api-key',self._KEY)
+            request = urllib.request.Request(feed_url)
+            request.add_header('x-api-key', self._KEY)
+            with contextlib.closing(urllib.request.urlopen(request)) as r:
                 data = r.read()
                 return FeedResponse(data)
 
-        except (urllib2.URLError, google.protobuf.message.DecodeError) as e:
+        except (urllib.error.URLError, google.protobuf.message.DecodeError) as e:
             logger.error('Couldn\'t connect to MTA server: ' + str(e))
             return False
 
@@ -216,9 +218,14 @@ class Mtapi(object):
         with self._read_lock:
             sortable_stations = copy.deepcopy(self._stations).values()
 
-        sortable_stations.sort(key=lambda x: distance(x['location'], point))
-        sortable_stations = map(lambda x: x.serialize(), sortable_stations)
-        return sortable_stations[:limit]
+        #sortable_stations.sort(key=lambda x: distance(x['location'], point))
+        #sortable_stations = map(lambda x: x.serialize(), sortable_stations)
+        #return sortable_stations[:limit]
+        sorted_stations = sorted(sortable_stations, key=lambda s: distance(s['location'], point))
+        serialized_stations = map(lambda s: s.serialize(), sorted_stations)
+
+        return list(islice(serialized_stations, limit))
+
 
     def get_routes(self):
         return self._routes.keys()
@@ -252,7 +259,8 @@ class Mtapi(object):
         return out
 
     def is_expired(self):
-        if self.threader and self.threader.restart_if_dead():
+        #if self.threader and self.threader.restart_if_dead():
+        if self._THREADED and self.threader and self.threader.restart_if_dead():
             return False
         elif self._EXPIRES_SECONDS:
             age = datetime.datetime.now(TZ) - self._last_update
