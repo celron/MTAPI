@@ -61,22 +61,14 @@ class Mtapi(object):
 
 
     _FEED_URLS = [
-        # 1 2 3 4 5 6 S note that S becomes GS... does this make sense?
-        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs',
-        # L line
-        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-l',
-        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-jz',
-        # this is SI
-        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-7',
-        # this is the N Q R W still beta
-        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-nqrw',
-        # this is the B D F M still beta
-        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-bdfm',
-        # this is the A C E still beta
-        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace',
-        # this is the G still beta
-        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-g'
-
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs',  # 1234567S
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-l',  # L
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-nqrw', # NRQW
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-bdfm', # BDFM
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace', # ACE
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-si', # (SIR)
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-jz', # JZ
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-g'  # G
     ]
 
     def __init__(self, key, stations_file, expires_seconds=60, max_trains=10, max_minutes=30, threaded=False):
@@ -84,6 +76,7 @@ class Mtapi(object):
         self._MAX_TRAINS = max_trains
         self._MAX_MINUTES = max_minutes
         self._EXPIRES_SECONDS = expires_seconds
+        self._THREADED = threaded
         self._stations = {}
         self._stops_to_stations = {}
         self._routes = {}
@@ -95,7 +88,7 @@ class Mtapi(object):
 
         # initialize the stations database
         try:
-            with open(stations_file, 'rb') as f:
+            with open(stations_file, 'r') as f:
                 self._stations = json.load(f)
                 for id in self._stations:
                     self._stations[id] = self._Station(self._stations[id])
@@ -112,10 +105,6 @@ class Mtapi(object):
             self.threader.start_timer()
 
     @staticmethod
-    def _init_feeds_key(key, urls):
-        return list(map(lambda x: x + '&key=' + key, urls))
-
-    @staticmethod
     def _build_stops_index(stations):
         stops = {}
         for station_id in stations:
@@ -124,20 +113,19 @@ class Mtapi(object):
 
         return stops
 
-    # changed to use the new keys located in the header
-    def _load_mta_feed(self, feed_url):
-        try:
             #header = { 'x-api-key': self._KEY}
             #request = urllib2.Request(feed_url,None,header)
             # with contextlib.closing(urllib2.urlopen(feed_url)) as r:
             # header = { 'x-api-key',self._KEY)
+    def _load_mta_feed(self, feed_url):
+        try:
             request = urllib.request.Request(feed_url)
             request.add_header('x-api-key', self._KEY)
             with contextlib.closing(urllib.request.urlopen(request)) as r:
                 data = r.read()
                 return FeedResponse(data)
 
-        except (urllib.error.URLError, google.protobuf.message.DecodeError) as e:
+        except (urllib.error.URLError, google.protobuf.message.DecodeError, ConnectionResetError) as e:
             logger.error('Couldn\'t connect to MTA server: ' + str(e))
             return False
 
@@ -169,7 +157,7 @@ class Mtapi(object):
                     continue
 
                 direction = trip.direction[0]
-                route_id = trip.route_id
+                route_id = trip.route_id.upper()
 
                 # check if this is a trip_update only otherwise skip but why?
 
@@ -218,9 +206,6 @@ class Mtapi(object):
         with self._read_lock:
             sortable_stations = copy.deepcopy(self._stations).values()
 
-        #sortable_stations.sort(key=lambda x: distance(x['location'], point))
-        #sortable_stations = map(lambda x: x.serialize(), sortable_stations)
-        #return sortable_stations[:limit]
         sorted_stations = sorted(sortable_stations, key=lambda s: distance(s['location'], point))
         serialized_stations = map(lambda s: s.serialize(), sorted_stations)
 
@@ -231,6 +216,8 @@ class Mtapi(object):
         return self._routes.keys()
 
     def get_by_route(self, route):
+        route = route.upper()
+
         if self.is_expired():
             self._update()
 
@@ -259,7 +246,6 @@ class Mtapi(object):
         return out
 
     def is_expired(self):
-        #if self.threader and self.threader.restart_if_dead():
         if self._THREADED and self.threader and self.threader.restart_if_dead():
             return False
         elif self._EXPIRES_SECONDS:
